@@ -1177,9 +1177,9 @@ class SunLightSettings:
     sunset_time: datetime.time | None
     time_zone: datetime.tzinfo
     transition: int
-    accent_color: Optional[tuple[float, float, float]]
-    accent_color_lower_bound: Optional[float]
-    accent_color_upper_bound: Optional[float]
+    accent_color: tuple[float, float, float] | None
+    accent_color_lower_bound: float | None
+    accent_color_upper_bound: float | None
 
     _accent_color_xyb: tuple[float, float, float] = None
     _bezier_point_xyb: tuple[float, float, float] = None
