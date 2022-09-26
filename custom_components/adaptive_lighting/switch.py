@@ -1223,7 +1223,7 @@ class SunLightSettings:
         self.accent_color = accent_color
         if accent_color is not None:
             self._accent_color_xyb = color_RGB_to_xy_brightness(*accent_color)
-            color_upper_temp: float = self.calc_color_temp_kelvin(self.accent_color_upper_bound, False)
+            color_upper_temp: float = self.calc_color_temp_kelvin(self.accent_color_upper_bound)
             color_upper_rgb: tuple[float, float, float] = color_temperature_to_rgb(
                 color_upper_temp
             )
