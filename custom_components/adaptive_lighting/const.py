@@ -217,6 +217,32 @@ DOCS_APPLY = {
     CONF_LIGHTS: "A light (or list of lights) to apply the settings to. 💡",
 }
 
+####### Accent Colors
+
+CONF_ACCENT_COLOR, DEFAULT_ACCENT_COLOR = "accent_color", None
+CONF_ACCENT_COLOR_RGB, DEFAULT_ACCENT_COLOR_RGB = "accent_color_rgb", None
+CONF_ACCENT_COLOR_XY, DEFAULT_ACCENT_COLOR_XY = "accent_color_xy", None
+CONF_ACCENT_COLOR_HS, DEFAULT_ACCENT_COLOR_HS = "accent_color_hs", None
+CONF_ACCENT_COLOR_MIX_MIN, DEFAULT_ACCENT_COLOR_MIX_MIN = "accent_color_mix_min", -50
+CONF_ACCENT_COLOR_MIX_MAX, DEFAULT_ACCENT_COLOR_MIX_MAX = "accent_color_mix_max", 100
+ATTR_SWITCH_ACCENT_COLOR = "accent_color"
+ENABLE_ACCENT_COLOR_SWITCH = "enable_accent_color_switch"
+ATTR_USE_ACCENT_COLOR = "use_accent_color"
+SERVICE_SET_ACCENT_COLOR = "set_accent_color"
+CONF_ACCENT_RGB = "rgb"
+CONF_ACCENT_HS = "hs"
+CONF_ACCENT_XY = "xy"
+
+DOCS_ACCENT_COLOR = {
+    CONF_ENTITY_ID: "The `entity_id` of the switch with the settings to apply. 📝",
+    CONF_ACCENT_RGB: "New accent color as RGB triple.",
+    CONF_ACCENT_HS: "New accent color as hue - saturation vector.",
+    CONF_ACCENT_XY: "New accent color as XY vector.",
+}
+
+ICON_ACCENT_COLOR = "mdi:palette"
+
+#######
 
 def int_between(min_int, max_int):
     """Return an integer between 'min_int' and 'max_int'."""
@@ -271,6 +297,13 @@ VALIDATION_TUPLES = [
         DEFAULT_AUTORESET_CONTROL,
         int_between(0, 365 * 24 * 60 * 60),  # 1 year max
     ),
+    ####### Accent Colors
+    (CONF_ACCENT_COLOR_RGB, DEFAULT_ACCENT_COLOR_RGB, vol.Any(None,[int])),
+    (CONF_ACCENT_COLOR_XY, DEFAULT_ACCENT_COLOR_XY, vol.Any(None,[float])),
+    (CONF_ACCENT_COLOR_HS, DEFAULT_ACCENT_COLOR_HS, vol.Any(None,[float])),
+    (CONF_ACCENT_COLOR_MIX_MIN, DEFAULT_ACCENT_COLOR_MIX_MIN, int_between(-100, 100)),
+    (CONF_ACCENT_COLOR_MIX_MAX, DEFAULT_ACCENT_COLOR_MIX_MAX, int_between(-100, 100)),
+    #######
 ]
 
 CONST_COLOR = "color"
@@ -339,6 +372,18 @@ def apply_service_schema(initial_transition: int = 1):
             vol.Optional(CONF_TURN_ON_LIGHTS, default=False): cv.boolean,
         }
     )
+
+
+###### Accent Color
+SET_ACCENT_COLOR_SCHEMA = vol.Schema(
+    {
+        vol.Optional(CONF_ENTITY_ID): cv.entity_ids,
+        vol.Optional(CONF_ACCENT_RGB, default=None): vol.Any(None, [int]),
+        vol.Optional(CONF_ACCENT_HS, default=None): vol.Any(None, [float]),
+        vol.Optional(CONF_ACCENT_XY, default=None): vol.Any(None, [float]),
+    }
+)
+######
 
 
 SET_MANUAL_CONTROL_SCHEMA = vol.Schema(

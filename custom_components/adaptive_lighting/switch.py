@@ -14,6 +14,9 @@ import logging
 import math
 from typing import Any, Literal
 
+# DEBUG
+# import time
+
 import astral
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
@@ -91,6 +94,12 @@ from homeassistant.util.color import (
     color_temperature_to_rgb,
     color_xy_to_hs,
     color_xy_to_RGB,
+    ####### Accent Colors
+    color_hs_to_RGB,
+    color_RGB_to_xy_brightness,
+    color_xy_brightness_to_RGB,
+    color_xy_to_RGB,
+    #######
 )
 import homeassistant.util.dt as dt_util
 import ulid_transform
@@ -152,6 +161,23 @@ from .const import (
     VALIDATION_TUPLES,
     apply_service_schema,
     replace_none_str,
+    ####### Accent Colors
+    ATTR_USE_ACCENT_COLOR,
+    ATTR_SWITCH_ACCENT_COLOR,
+    CONF_ACCENT_COLOR,
+    CONF_ACCENT_COLOR_HS,
+    CONF_ACCENT_COLOR_MIX_MAX,
+    CONF_ACCENT_COLOR_MIX_MIN,
+    CONF_ACCENT_COLOR_RGB,
+    CONF_ACCENT_COLOR_XY,
+    CONF_ACCENT_HS,
+    CONF_ACCENT_RGB,
+    CONF_ACCENT_XY,
+    ENABLE_ACCENT_COLOR_SWITCH,
+    SERVICE_SET_ACCENT_COLOR,
+    SET_ACCENT_COLOR_SCHEMA,
+    ICON_ACCENT_COLOR,
+    #######
 )
 
 _SUPPORT_OPTS = {
@@ -371,7 +397,7 @@ def _get_switches_from_service_call(
     hass: HomeAssistant, service_call: ServiceCall
 ) -> list[AdaptiveSwitch]:
     data = service_call.data
-    lights = data[CONF_LIGHTS]
+    lights: list[str] | None = data.get(CONF_LIGHTS)
     switch_entity_ids: list[str] | None = data.get("entity_id")
 
     if not lights and not switch_entity_ids:
@@ -484,6 +510,9 @@ async def async_setup_entry(
     adapt_brightness_switch = SimpleSwitch(
         "Adapt Brightness", True, hass, config_entry, ICON_BRIGHTNESS
     )
+    accent_color_switch = SimpleSwitch(
+        "Enable Accent Color", False, hass, config_entry, ICON_ACCENT_COLOR
+    )
     switch = AdaptiveSwitch(
         hass,
         config_entry,
@@ -491,6 +520,7 @@ async def async_setup_entry(
         sleep_mode_switch,
         adapt_color_switch,
         adapt_brightness_switch,
+        accent_color_switch,
     )
 
     # save our switch instance, allows us to make switch's entity_id optional in service calls.
@@ -499,10 +529,11 @@ async def async_setup_entry(
     data[config_entry.entry_id][SLEEP_MODE_SWITCH] = sleep_mode_switch
     data[config_entry.entry_id][ADAPT_COLOR_SWITCH] = adapt_color_switch
     data[config_entry.entry_id][ADAPT_BRIGHTNESS_SWITCH] = adapt_brightness_switch
+    data[config_entry.entry_id][ENABLE_ACCENT_COLOR_SWITCH] = accent_color_switch
     data[config_entry.entry_id][SWITCH_DOMAIN] = switch
 
     async_add_entities(
-        [sleep_mode_switch, adapt_color_switch, adapt_brightness_switch, switch],
+        [sleep_mode_switch, adapt_color_switch, adapt_brightness_switch, accent_color_switch, switch],
         update_before_add=True,
     )
 
@@ -529,12 +560,39 @@ async def async_setup_entry(
                         data[CONF_TRANSITION],
                         data[ATTR_ADAPT_BRIGHTNESS],
                         data[ATTR_ADAPT_COLOR],
+                        data[ATTR_USE_ACCENT_COLOR], ### Accent Color
                         data[CONF_PREFER_RGB_COLOR],
                         force=True,
                         context=switch.create_context(
                             "service", parent=service_call.context
                         ),
                     )
+
+    ###### Accent Color
+    @callback
+    async def handle_set_accent_color(service_call: ServiceCall):
+        data = service_call.data
+        _LOGGER.debug(
+            "Called 'adaptive_lighting.set_accent_color' service with '%s'",
+            data,
+        )
+        switches = _get_switches_from_service_call(hass, service_call)
+        for switch in switches:
+            switch._sun_light_settings.set_accent_color(
+                get_rgb_from_any_form(
+                    data[CONF_ACCENT_RGB] if CONF_ACCENT_RGB in data else None,
+                    data[CONF_ACCENT_HS] if CONF_ACCENT_HS in data else None,
+                    data[CONF_ACCENT_XY] if CONF_ACCENT_XY in data else None
+                )
+            )
+            if switch.is_on:
+                await switch._update_attrs_and_maybe_adapt_lights(
+                    switch._lights,
+                    transition=switch._initial_transition,
+                    force=True,
+                    context=switch.create_context("accent"),
+                )
+    ######
 
     @callback
     async def handle_set_manual_control(service_call: ServiceCall):
@@ -576,6 +634,16 @@ async def async_setup_entry(
             switch._initial_transition
         ),  # pylint: disable=protected-access
     )
+
+    ###### Accent Color
+    # Register `set_accent_color` service
+    hass.services.async_register(
+        domain=DOMAIN,
+        service=SERVICE_SET_ACCENT_COLOR,
+        service_func=handle_set_accent_color,
+        schema=SET_ACCENT_COLOR_SCHEMA,
+    )
+    ######
 
     # Register `set_manual_control` service
     hass.services.async_register(
@@ -623,8 +691,27 @@ def validate(
         value = data.get(key)
         if value is not None:
             data[key] = validate_value(value)  # Fix the types of the inputs
+    ###### Accent Color
+    data[CONF_ACCENT_COLOR] = get_rgb_from_any_form(
+        data[CONF_ACCENT_COLOR_RGB] if CONF_ACCENT_COLOR_RGB in data else None,
+        data[CONF_ACCENT_COLOR_HS] if CONF_ACCENT_COLOR_HS in data else None,
+        data[CONF_ACCENT_COLOR_XY] if CONF_ACCENT_COLOR_XY in data else None
+    )
+    ######
     return data
 
+###### Accent Color
+def get_rgb_from_any_form(
+    rgb: tuple[float, float, float] = None, hs: tuple[float, float] = None, xy: tuple[float, float] = None
+) -> union[tuple[float, float, float], None]:
+    if rgb is not None:
+        return rgb
+    if hs is not None:
+        return color_hs_to_RGB(hs[0], hs[1])
+    if xy is not None:
+        return color_xy_to_RGB(xy[0], xy[1])
+    return None
+######
 
 def match_switch_state_event(event: Event, from_or_to_state: list[str]):
     """Match state event when either 'from_state' or 'to_state' matches."""
@@ -722,6 +809,18 @@ def color_difference_redmean(
     green_term = 4 * delta_g**2
     blue_term = (2 + (255 - r_hat) / 256) * delta_b**2
     return math.sqrt(red_term + green_term + blue_term)
+
+
+###### Accent Color
+def interpolate_colors_xyb(
+    xyb1: tuple[float, float, float], xyb: tuple[float, float, float], weight: float
+) -> tuple[float, float, float]:
+    """Interpolate between two HSV colors."""
+    x = xyb1[0] + (xyb[0] - xyb1[0]) * weight
+    y = xyb1[1] + (xyb[1] - xyb1[1]) * weight
+    b = xyb1[2] + (xyb[2] - xyb1[2]) * weight
+    return (x, y, b)
+######
 
 
 # All comparisons should be done with RGB since
@@ -840,6 +939,7 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         sleep_mode_switch: SimpleSwitch,
         adapt_color_switch: SimpleSwitch,
         adapt_brightness_switch: SimpleSwitch,
+        accent_color_switch: SimpleSwitch,
     ):
         """Initialize the Adaptive Lighting switch."""
         # Set attributes that can't be modified during runtime
@@ -848,6 +948,7 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         self.sleep_mode_switch = sleep_mode_switch
         self.adapt_color_switch = adapt_color_switch
         self.adapt_brightness_switch = adapt_brightness_switch
+        self.accent_color_switch = accent_color_switch
 
         data = validate(config_entry)
 
@@ -965,8 +1066,17 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             sunset_time=data[CONF_SUNSET_TIME],
             min_sunset_time=data[CONF_MIN_SUNSET_TIME],
             time_zone=self.hass.config.time_zone,
+            ###### Accent Color
+            accent_color=data[CONF_ACCENT_COLOR],
+            accent_color_lower_bound=float(data[CONF_ACCENT_COLOR_MIX_MIN])/100.0,
+            accent_color_upper_bound=float(data[CONF_ACCENT_COLOR_MIX_MAX])/100.0,
+            ######
             transition=data[CONF_TRANSITION],
+            # DEBUG
+            # initial_time=time.time()
         )
+        ###### Accent Color
+        self._sun_light_settings.set_accent_color(data[CONF_ACCENT_COLOR])
         _LOGGER.debug(
             "%s: Set switch settings for lights '%s'. now using data: '%s'",
             self._name,
@@ -999,6 +1109,22 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             )
         last_state = await self.async_get_last_state()
         is_new_entry = last_state is None  # newly added to HA
+        ###### Accent Color
+        if (not is_new_entry
+            and self._sun_light_settings.accent_color is None
+            and ATTR_SWITCH_ACCENT_COLOR in last_state.attributes
+            and last_state.attributes[ATTR_SWITCH_ACCENT_COLOR] is not None
+            and len(last_state.attributes[ATTR_SWITCH_ACCENT_COLOR]) == 3
+        ):
+            # restore previous accent_color as the entry is available 
+            # and the color is not set by the configuration
+            last_accent_color = last_state.attributes[ATTR_SWITCH_ACCENT_COLOR]
+            self._sun_light_settings.accent_color = (
+                float(last_accent_color[0]),
+                float(last_accent_color[1]),
+                float(last_accent_color[2]),
+            )
+        ######
         if is_new_entry or last_state.state == STATE_ON:
             await self.async_turn_on(adapt_lights=not self._only_once)
         else:
@@ -1033,8 +1159,15 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             self.sleep_mode_switch.entity_id,
             self._sleep_mode_switch_state_event,
         )
+        ###### Accent Color
+        remove_accent_color = async_track_state_change_event(
+            self.hass,
+            self.accent_color_switch.entity_id,
+            self._accent_color_switch_state_event,
+        )
+        ######
 
-        self.remove_listeners.extend([remove_interval, remove_sleep])
+        self.remove_listeners.extend([remove_interval, remove_sleep,remove_accent_color])
 
         if self._lights:
             self._expand_light_groups()
@@ -1133,6 +1266,7 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         transition: int | None = None,
         adapt_brightness: bool | None = None,
         adapt_color: bool | None = None,
+        use_accent_color: bool | None = None,
         prefer_rgb_color: bool | None = None,
         force: bool = False,
         context: Context | None = None,
@@ -1147,12 +1281,14 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             adapt_brightness = self.adapt_brightness_switch.is_on
         if adapt_color is None:
             adapt_color = self.adapt_color_switch.is_on
+        if use_accent_color is None:
+            use_accent_color = self.accent_color_switch.is_on
         if prefer_rgb_color is None:
             prefer_rgb_color = self._prefer_rgb_color
 
         # The switch might be off and not have _settings set.
         self._settings = self._sun_light_settings.get_settings(
-            self.sleep_mode_switch.is_on, transition
+            self.sleep_mode_switch.is_on, self.accent_color_switch.is_on, transition
         )
 
         # Build service data.
@@ -1173,7 +1309,7 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         if (
             ATTR_COLOR_TEMP_KELVIN in features
             and adapt_color
-            and not (prefer_rgb_color and supports_colors)
+            and not ((prefer_rgb_color or use_accent_color) and supports_colors)
             and not (sleep_rgb and supports_colors)
         ):
             _LOGGER.debug("%s: Setting color_temp of light %s", self._name, light)
@@ -1270,7 +1406,7 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
         assert self.is_on
         self._settings.update(
             self._sun_light_settings.get_settings(
-                self.sleep_mode_switch.is_on, transition
+                self.sleep_mode_switch.is_on, self.accent_color_switch.is_on, transition
             )
         )
         self.async_write_ha_state()
@@ -1374,6 +1510,22 @@ class AdaptiveSwitch(SwitchEntity, RestoreEntity):
             force=True,
             context=self.create_context("sleep", parent=event.context),
         )
+
+    ###### Accent Colors
+    async def _accent_color_switch_state_event(self, event: Event) -> None:
+        if not match_switch_state_event(event, (STATE_ON, STATE_OFF)):
+            return
+        _LOGGER.debug(
+            "%s: _accent_color_switch_state_event, event: '%s'", self._name, event
+        )
+        # Reset the manually controlled status when the "sleep mode" changes
+        self.turn_on_off_listener.reset(*self._lights)
+        await self._update_attrs_and_maybe_adapt_lights(
+            transition=self._initial_transition,
+            force=True,
+            context=self.create_context("accent", parent=event.context),
+        )
+    ######
 
     async def _light_event(self, event: Event) -> None:
         old_state = event.data.get("old_state")
@@ -1505,7 +1657,7 @@ class SimpleSwitch(SwitchEntity, RestoreEntity):
         self._state = False
 
 
-@dataclass(frozen=True)
+@dataclass
 class SunLightSettings:
     """Track the state of the sun and associated light settings."""
 
@@ -1528,6 +1680,66 @@ class SunLightSettings:
     min_sunset_time: datetime.time | None
     time_zone: datetime.tzinfo
     transition: int
+
+    # DEBUG
+    # initial_time: float | None
+
+
+    ###### Accent Colors
+    accent_color: tuple[float, float, float] | None
+    accent_color_lower_bound: float | None
+    accent_color_upper_bound: float | None
+
+    _accent_color_xyb: tuple[float, float, float] = None
+    _bezier_point_xyb: tuple[float, float, float] = None
+
+    def set_accent_color(self, accent_color: tuple[float, float, float]):
+        self.accent_color = accent_color
+        if accent_color is not None:
+            self._accent_color_xyb = color_RGB_to_xy_brightness(*accent_color)
+            color_upper_temp: float = self.calc_color_temp_kelvin(self.accent_color_upper_bound)
+            color_upper_rgb: tuple[float, float, float] = color_temperature_to_rgb(
+                color_upper_temp
+            )
+            self._bezier_point_xyb = color_RGB_to_xy_brightness(*color_upper_rgb)
+        else:
+            self._accent_color_xyb = None
+            self._bezier_point_xyb = None
+
+    def calc_accented_color_interpolation(
+        self, rgb_color: tuple[float, float, float], accent_percent: float
+    ) -> tuple[float, float, float]:
+        if self.accent_color is None:
+            return None
+        if self._bezier_point_xyb is None or self._accent_color_xyb is None:
+            self.set_accent_color(self.accent_color)
+        control_point1 = color_RGB_to_xy_brightness(*rgb_color)
+        control_point2 = interpolate_colors_xyb(
+            self._bezier_point_xyb,
+            self._accent_color_xyb,
+            accent_percent
+        )
+        xyb_color = interpolate_colors_xyb(
+            control_point1,
+            control_point2,
+            accent_percent
+        )
+        return color_xy_brightness_to_RGB(*xyb_color)
+
+    def calc_accented_color(
+        self, percent: float, rgb_color: tuple[float, float, float]
+    ) -> tuple[float, float, float]:
+        if self.accent_color is None:
+            return rgb_color
+        if percent <= self.accent_color_lower_bound:
+            return rgb_color
+        elif percent < self.accent_color_upper_bound:
+            accent_percent = (percent - self.accent_color_lower_bound) \
+                / (self.accent_color_upper_bound - self.accent_color_lower_bound)
+            return self.calc_accented_color_interpolation(rgb_color, accent_percent)
+        else:
+            return self.accent_color
+    ######
 
     def get_sun_events(self, date: datetime.datetime) -> dict[str, float]:
         """Get the four sun event's timestamps at 'date'."""
@@ -1630,6 +1842,12 @@ class SunLightSettings:
 
     def calc_percent(self, transition: int) -> float:
         """Calculate the position of the sun in %."""
+
+        # DEBUG
+        # dt = time.time() - self.initial_time
+        # PERIOD=90
+        # return math.cos(2*math.pi*dt/PERIOD)
+
         now = dt_util.utcnow()
 
         target_time = now + timedelta(seconds=transition)
@@ -1669,7 +1887,7 @@ class SunLightSettings:
             return 5 * round(ct / 5)  # round to nearest 5
 
     def get_settings(
-        self, is_sleep, transition
+        self, is_sleep, use_accent, transition
     ) -> dict[str, float | int | tuple[float, float] | tuple[float, float, float]]:
         """Get all light settings.
 
@@ -1691,6 +1909,8 @@ class SunLightSettings:
             )
         # backwards compatibility for versions < 1.3.1 - see #403
         color_temp_mired: float = math.floor(1000000 / color_temp_kelvin)
+        if use_accent and (self.accent_color is not None) and (not is_sleep):
+            rgb_color = self.calc_accented_color(percent, rgb_color)
         xy_color: tuple[float, float] = color_RGB_to_xy(*rgb_color)
         hs_color: tuple[float, float] = color_xy_to_hs(*xy_color)
         return {
@@ -1701,6 +1921,7 @@ class SunLightSettings:
             "xy_color": xy_color,
             "hs_color": hs_color,
             "sun_position": percent,
+            ATTR_SWITCH_ACCENT_COLOR: self.accent_color,
         }
 
 
